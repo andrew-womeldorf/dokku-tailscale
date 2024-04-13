@@ -99,7 +99,7 @@ tailscale_serve_url() {
   verify_app_name "$APP"
 
   output=$("$DOCKER_BIN" exec -it "ts-${APP}" tailscale serve status)
-  if [[ "$(echo $output | tr -d '[:space:]')" != "No serve config" ]]; then
+  if [[ "$(echo $output | tr -d '[:space:]')" != "Noserveconfig" ]]; then
     echo $output | head -n 1 | cut -d ' ' -f 1 | tr -d '[:space:]'
   fi
 }
