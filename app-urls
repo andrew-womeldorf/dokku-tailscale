@@ -6,5 +6,7 @@ set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
 
 declare APP="$1"
 
-dokku_log_info1 "cleaning up tailscale resources for $APP"
-tailscale_down
+if [[ -n "$(tailscale_is_running_for_app)" ]]; then
+  echo "http://${APP}"
+  tailscale_serve_url
+fi

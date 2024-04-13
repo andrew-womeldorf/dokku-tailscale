@@ -81,3 +81,25 @@ tailscale_serve_stop() {
   "$DOCKER_BIN" exec -it "ts-${APP}" tailscale serve --https=443 off
   dokku_log_info1 "stopped serving traffic for ${APP} on :443"
 }
+
+tailscale_is_running_for_app() {
+  # If there's a tailscale container running for this app, return the name of
+  # the tailscale container.
+  #
+  # Callers can use the output by checking if it's empty. An empty output means
+  # that the container is not found.
+  [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
+  verify_app_name "$APP"
+
+  "$DOCKER_BIN" ps --filter "name=ts-${APP}" --format "{{.Names}}"
+}
+
+tailscale_serve_url() {
+  [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
+  verify_app_name "$APP"
+
+  output=$("$DOCKER_BIN" exec -it "ts-${APP}" tailscale serve status)
+  if [[ "$(echo $output | tr -d '[:space:]')" != "No serve config" ]]; then
+    echo $output | head -n 1 | cut -d ' ' -f 1 | tr -d '[:space:]'
+  fi
+}
