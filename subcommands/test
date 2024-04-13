@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+
+source "$PLUGIN_AVAILABLE_PATH/tailscale/functions"
+
+cmd-tailscale-test() {
+  declare cmd="tailscale:test"
+  [[ "$1" == "$cmd" ]] && shift 1
+
+  tailscale_test
+}
+
+cmd-tailscale-test "$@"

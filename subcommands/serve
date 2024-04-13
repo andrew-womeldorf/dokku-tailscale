@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+
+source "$PLUGIN_AVAILABLE_PATH/tailscale/functions"
+
+cmd-tailscale-serve() {
+  declare desc="serve the provided port over https"
+  declare cmd="tailscale:serve"
+  [[ "$1" == "$cmd" ]] && shift 1
+
+  declare APP="$1" PORT="$2"
+
+  if [[ "$PORT" == "stop" ]]; then
+    tailscale_serve_stop
+  else
+    tailscale_serve_start
+  fi
+}
+
+cmd-tailscale-serve "$@"

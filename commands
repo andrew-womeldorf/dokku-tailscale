@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -eo pipefail
+source "$PLUGIN_AVAILABLE_PATH/tailscale/help-functions"
+[[ $DOKKU_TRACE ]] && set -x
+
+case "$1" in
+  help | tailscale:help)
+    cmd-tailscale-help "$@"
+    ;;
+
+  *)
+    exit $DOKKU_NOT_IMPLEMENTED_EXIT
+    ;;
+
+esac
