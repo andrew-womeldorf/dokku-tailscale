@@ -6,7 +6,8 @@ cmd-tailscale-help() {
   declare desc="help command"
   declare CMD="$1"
   local plugin_name="tailscale"
-  local plugin_description="$(cat <<desc
+  local plugin_description="Run tailscale sidecar for an app"
+  local plugin_description_long="$(cat <<desc
 Run tailscale sidecar for an app
 
 This plugin expects global configuration values set for the oauth key:
@@ -20,7 +21,7 @@ desc
   if [[ "$CMD" == "${plugin_name}:help" ]]; then
     echo -e "Usage: dokku ${plugin_name}[:COMMAND]"
     echo ''
-    echo "$plugin_description"
+    echo "$plugin_description_long"
     echo ''
     echo 'Additional commands:'
     fn-help-content | sort | column -c2 -t -s,
