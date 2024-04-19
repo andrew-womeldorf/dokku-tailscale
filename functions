@@ -12,6 +12,8 @@ tailscale_up() {
   [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
   verify_app_name "$APP"
 
+  [[ -n "$(tailscale_is_running_for_app)" ]] && dokku_log_info1 "tailscale is running for $APP" && return
+
   local authkey="$(config_get --global TS_AUTHKEY)"
   [[ -z "$authkey" ]] && dokku_log_fail "Set the TS_AUTHKEY with dokku config:set --global"
 
