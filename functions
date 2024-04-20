@@ -12,32 +12,75 @@ tailscale_up() {
   [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
   verify_app_name "$APP"
 
-  [[ -n "$(tailscale_is_running_for_app)" ]] && dokku_log_info1 "tailscale is running for $APP" && return
+  local authkey="$(config_get --global TS_AUTHKEY)"
+  [[ -z "$authkey" ]] && dokku_log_fail "Set the TS_AUTHKEY with dokku config:set --global"
+
+  # Tailscale will join the app container's network, and will advertise its
+  # name to the tailnet as the hostname of the app container. By default, the
+  # hostname is the container ID. Set the hostname, instead, to the name of the
+  # app, so that the machine in the tailnet is the same name as the app.
+  #
+  # Note that, if the app container is already running when tailscale:up is
+  # called, then the containers need to be restarted in order to take on the
+  # correct hostname. The container will still be put on the tailnet without a
+  # restart, but with the wrong hostname.
+  dokku_log_info1 "settings docker-option for ${APP} to --hostname=${APP}"
+  phases="$(get_phases 'deploy')"
+  add_passed_docker_option phases[@] "--hostname ${APP}"
+
+  # create state dir
+  local storage_directory="${DOKKU_LIB_ROOT}/data/tailscale/${APP}"
+  dokku_log_info1 "Ensuring ${storage_directory} exists"
+  mkdir -p "${storage_directory}"
+
+  touch "${storage_directory}/DOKKU_ENABLED"
+}
+
+tailscale_detach() {
+  [[ -z "$APP" ]] && dokku_log_fail "No app specified"
+  verify_app_name "$APP"
+
+  ( ! tailscale_is_enabled ) && return
+
+  container_id=$("$DOCKER_BIN" ps -qaf "name=ts-$APP")
+  if [[ -n "$container_id" ]] ; then
+    dokku_log_info1 "removing tailscale container ts-${APP}"
+    "$DOCKER_BIN" container stop "${container_id}"
+    "$DOCKER_BIN" container rm "${container_id}"
+  fi
+}
+
+tailscale_down() {
+  [[ -z "$APP" ]] && dokku_log_fail "No app specified"
+  verify_app_name "$APP"
+
+  ( ! tailscale_is_enabled ) && return
+  tailscale_detach
+  rm -f "${DOKKU_LIB_ROOT}/data/tailscale/${APP}/DOKKU_ENABLED"
+}
+
+tailscale_is_enabled() {
+  [[ -z "$APP" ]] && dokku_log_fail "No app specified"
+  verify_app_name "$APP"
+  [[ -f "${DOKKU_LIB_ROOT}/data/tailscale/${APP}/DOKKU_ENABLED" ]]
+}
+
+tailscale_attach() {
+  [[ -z "$APP" ]] && dokku_log_fail "No app specified"
+  verify_app_name "$APP"
+
+  ( ! tailscale_is_enabled ) && return
 
   local authkey="$(config_get --global TS_AUTHKEY)"
   [[ -z "$authkey" ]] && dokku_log_fail "Set the TS_AUTHKEY with dokku config:set --global"
 
-  # create state dir
-  local storage_directory="${DOKKU_LIB_ROOT}/data/storage/ts_${APP}"
-  dokku_log_info1 "Ensuring ${storage_directory} exists"
-  mkdir -p "${storage_directory}"
+  local storage_directory="${DOKKU_LIB_ROOT}/data/tailscale/${APP}"
 
-  # create network
-  dokku_log_info1 "creating network ${APP}"
-  "$DOCKER_BIN" network create "${APP}"
-
-  # set the app container's network mode to share the space with tailscale
-  dokku_log_info1 "settings docker-option for ${APP} to --network=container:ts-${APP}"
-  phases="$(get_phases 'deploy')"
-  add_passed_docker_option phases[@] "--network container:ts-${APP}"
-
-  # start tailscale
   dokku_log_info1 "starting tailscale container ts-${APP}"
   "$DOCKER_BIN" container run \
     "--label=com.dokku.app-name=${APP}" \
     $DOKKU_GLOBAL_RUN_ARGS \
     --name "ts-${APP}" \
-    --hostname "${APP}" \
     --env TS_AUTHKEY="${authkey}" \
     --env TS_EXTRA_ARGS="--advertise-tags=tag:dokku" \
     --env TS_STATE_DIR=/var/lib/tailscale \
@@ -46,33 +89,18 @@ tailscale_up() {
     --cap-add=NET_ADMIN \
     --cap-add=SYS_MODULE \
     --restart unless-stopped \
-    --network "${APP}" \
+    --network "container:${APP}.web.1" \
     --detach \
     tailscale/tailscale:latest
-}
-
-tailscale_down() {
-  [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
-  verify_app_name "$APP"
-
-  # remove docker network
-  dokku_log_info1 "removing network ${APP}"
-  "$DOCKER_BIN" network rm "${APP}" || true
-
-  # does not remove the state directory.
-  # unfortunately, tailscale runs as root in its containers, and the ownership
-  # of files and directories in the state dir end up as root, and the dokku
-  # user can't remove them.
-  # would love if there was a better solution for this, but, it shouldn't
-  # really matter, as far as I understand the tailscale state, if it gets
-  # reused...
 }
 
 tailscale_serve_start() {
   [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
   verify_app_name "$APP"
 
-  "$DOCKER_BIN" exec -it "ts-${APP}" tailscale serve --bg "$PORT"
+  ( ! tailscale_is_enabled ) && dokku_log_fail "tailscale is not enabled for $APP"
+
+  "$DOCKER_BIN" exec "ts-${APP}" tailscale serve --bg "$PORT"
   dokku_log_info1 "started serving traffic for ${APP} :${PORT} -> :443"
 }
 
@@ -80,7 +108,9 @@ tailscale_serve_stop() {
   [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
   verify_app_name "$APP"
 
-  "$DOCKER_BIN" exec -it "ts-${APP}" tailscale serve --https=443 off
+  ( ! tailscale_is_enabled ) && dokku_log_fail "tailscale is not enabled for $APP"
+
+  "$DOCKER_BIN" exec "ts-${APP}" tailscale serve --https=443 off
   dokku_log_info1 "stopped serving traffic for ${APP} on :443"
 }
 
@@ -100,7 +130,9 @@ tailscale_serve_url() {
   [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
   verify_app_name "$APP"
 
-  output=$("$DOCKER_BIN" exec -it "ts-${APP}" tailscale serve status)
+  ( ! tailscale_is_enabled ) && return
+
+  output=$("$DOCKER_BIN" exec "ts-${APP}" tailscale serve status)
   if [[ "$(echo $output | tr -d '[:space:]')" != "Noserveconfig" ]]; then
     echo $output | head -n 1 | cut -d ' ' -f 1 | tr -d '[:space:]'
   fi

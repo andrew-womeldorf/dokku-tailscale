@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+source "$PLUGIN_AVAILABLE_PATH/tailscale/functions"
+set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
+
+set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
+APP="$1"; INTERNAL_PORT="$2"; INTERNAL_IP_ADDRESS="$3"; IMAGE_TAG="$4";
+
+if tailscale_is_enabled ; then
+    tailscale_detach
+    tailscale_attach
+fi
+
