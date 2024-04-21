@@ -7,8 +7,9 @@ source "$PLUGIN_AVAILABLE_PATH/tailscale/functions"
 cmd-tailscale-test() {
   declare cmd="tailscale:test"
   [[ "$1" == "$cmd" ]] && shift 1
+  declare APP="$1"
 
-  tailscale_test
+  tailscale_detach
 }
 
 cmd-tailscale-test "$@"

@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2024-04-21
+### Added
+- `tailscale_attach`
+
 ### Changed
+- Add ts container to app container network, not the other way around
+- Rename `tailscale_down` to `tailscale_detach`
+- Data storage goes in a plugin data dir, not the storage dir
+- Print tailscale serve url first
+
+### Fixed
+- `tailscale_serve_url` does not request TTY during exec
 
 ## [0.0.4] - 2024-04-19
 ### Changed
@@ -39,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tailscale_serve_stop` function
 - `post-destroy` trigger
 
-[unreleased]: https://github.com/andrew-womeldorf/dokku-tailscale/compare/0.0.4...HEAD
+[unreleased]: https://github.com/andrew-womeldorf/dokku-tailscale/compare/0.1.0...HEAD
+[0.1.0]: https://github.com/andrew-womeldorf/dokku-tailscale/compare/0.0.4...0.1.0
 [0.0.4]: https://github.com/andrew-womeldorf/dokku-tailscale/compare/0.0.3...0.0.4
 [0.0.3]: https://github.com/andrew-womeldorf/dokku-tailscale/compare/0.0.2...0.0.3
 [0.0.2]: https://github.com/andrew-womeldorf/dokku-tailscale/compare/0.0.1...0.0.2
