@@ -2,9 +2,12 @@
 
 set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
 
-storagedir="${DOKKU_LIB_ROOT}/data/tailscale"
+trigger-tailscale-install() {
+    storagedir="${DOKKU_LIB_ROOT}/data/tailscale"
+    mkdir -p $storagedir
 
-mkdir -p $storagedir
+    # Install is potentially done by root.
+    chown dokku:dokku $storagedir
+}
 
-# Install is potentially done by root.
-chown dokku:dokku $storagedir
+trigger-tailscale-install "$@"
