@@ -5,7 +5,7 @@ Make apps available to your tailnet.
 ## Install
 
 ```sh
-dokku plugin install https://github.com/andrew-womeldorf/dokku-tailscale.git tailscale
+dokku plugin:install https://github.com/andrew-womeldorf/dokku-tailscale.git tailscale
 ```
 
 ## Prepare
