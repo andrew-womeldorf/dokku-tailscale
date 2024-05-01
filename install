@@ -2,4 +2,9 @@
 
 set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
 
-mkdir -p "${DOKKU_LIB_ROOT}/data/tailscale"
+storagedir="${DOKKU_LIB_ROOT}/data/tailscale"
+
+mkdir -p $storagedir
+
+# Install is potentially done by root.
+chown dokku:dokku $storagedir
