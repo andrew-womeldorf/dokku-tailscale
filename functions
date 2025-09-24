@@ -7,67 +7,195 @@ source "$PLUGIN_CORE_AVAILABLE_PATH/config/functions"
 source "$PLUGIN_CORE_AVAILABLE_PATH/docker-options/functions"
 source "$PLUGIN_CORE_AVAILABLE_PATH/ps/functions"
 source "$PLUGIN_CORE_AVAILABLE_PATH/storage/functions"
+# Parse a --service flag argument of the form service-plugin.service-name
+parse_service_flag() {
+  declare desc="Parse composite service identifier into SERVICE_PLUGIN and SERVICE"
+  local raw="$1"
+  if [[ -z "$raw" ]]; then
+    dokku_log_fail "--service flag requires value service-plugin.service-name (e.g. postgres.mydb)"
+  fi
+  if [[ "$raw" != *.* ]]; then
+    dokku_log_fail "Invalid service format. Use service-plugin.service-name (e.g. postgres.mydb)"
+  fi
+  export SERVICE_PLUGIN="${raw%%.*}" SERVICE="${raw#*.}"
+}
+
+# Service detection and validation functions (service plugins expose $PLUGIN_COMMAND_PREFIX and $SERVICE)
+
+verify_service_name() {
+  declare desc="verify that a service exists (SERVICE_PLUGIN + SERVICE). Running container check optional."
+  if [[ -z "$SERVICE" ]]; then
+    dokku_log_fail "SERVICE must not be empty"
+  fi
+  if [[ -z "$SERVICE_PLUGIN" ]]; then
+    dokku_log_fail "SERVICE_PLUGIN must not be empty when operating on a service"
+  fi
+  # Verify data directory first (creation proves service existence)
+  if [[ ! -d "${DOKKU_LIB_ROOT}/services/${SERVICE_PLUGIN}/${SERVICE}" ]]; then
+    dokku_log_fail "Service ${SERVICE_PLUGIN}/${SERVICE} data directory does not exist"
+  fi
+  return 0
+}
+
+is_service_mode() {
+  declare desc="check if we're operating in service mode vs app mode"
+  [[ -n "$SERVICE" && -n "$SERVICE_PLUGIN" ]]
+}
+
+get_target_name() {
+  declare desc="get the target name (either app or service string)"
+  if is_service_mode; then
+    echo "$SERVICE"
+  else
+    echo "$APP"
+  fi
+}
+
+get_hostname() {
+  declare desc="get the hostname to use on the tailnet"
+  if is_service_mode; then
+  echo "${SERVICE_PLUGIN}-${SERVICE}"
+  else
+    echo "$APP"
+  fi
+}
+
+get_container_name() {
+  declare desc="get the target container name to attach to"
+  if is_service_mode; then
+  echo "dokku.${SERVICE_PLUGIN}.${SERVICE}"
+  else
+    echo "${APP}.web.1"
+  fi
+}
+
+get_tailscale_container_name() {
+  declare desc="get the name for the tailscale sidecar container"
+  if is_service_mode; then
+  echo "ts-service-${SERVICE_PLUGIN}-${SERVICE}"
+  else
+    echo "ts-${APP}"
+  fi
+}
+
+get_storage_directory() {
+  declare desc="get the storage directory for tailscale state"
+  if is_service_mode; then
+  echo "${DOKKU_LIB_ROOT}/data/tailscale/services/${SERVICE_PLUGIN}/${SERVICE}"
+  else
+    echo "${DOKKU_LIB_ROOT}/data/tailscale/${APP}"
+  fi
+}
 
 tailscale_up() {
-  [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
-  verify_app_name "$APP"
+  local target_name="$(get_target_name)"
+  local hostname="$(get_hostname)"
+  local storage_directory="$(get_storage_directory)"
+  
+  # Validate target (app or service)
+  if is_service_mode; then
+    verify_service_name
+  else
+    [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
+    verify_app_name "$APP"
+  fi
 
   local authkey="$(config_get --global TS_AUTHKEY)"
   [[ -z "$authkey" ]] && dokku_log_fail "Set the TS_AUTHKEY with dokku config:set --global"
 
-  # Tailscale will join the app container's network, and will advertise its
-  # name to the tailnet as the hostname of the app container. By default, the
-  # hostname is the container ID. Set the hostname, instead, to the name of the
-  # app, so that the machine in the tailnet is the same name as the app.
-  #
-  # Note that, if the app container is already running when tailscale:up is
-  # called, then the containers need to be restarted in order to take on the
-  # correct hostname. The container will still be put on the tailnet without a
-  # restart, but with the wrong hostname.
-  dokku_log_info1 "settings docker-option for ${APP} to --hostname=${APP}"
-  phases="$(get_phases 'deploy')"
-  add_passed_docker_option phases[@] "--hostname ${APP}"
+  # For apps, set docker hostname option (services don't use docker-options)
+  if ! is_service_mode; then
+    # Tailscale will join the app container's network, and will advertise its
+    # name to the tailnet as the hostname of the app container. By default, the
+    # hostname is the container ID. Set the hostname, instead, to the name of the
+    # app, so that the machine in the tailnet is the same name as the app.
+    #
+    # Note that, if the app container is already running when tailscale:up is
+    # called, then the containers need to be restarted in order to take on the
+    # correct hostname. The container will still be put on the tailnet without a
+    # restart, but with the wrong hostname.
+    dokku_log_info1 "settings docker-option for ${APP} to --hostname=${hostname}"
+    phases="$(get_phases 'deploy')"
+    add_passed_docker_option phases[@] "--hostname ${hostname}"
+  fi
 
   # create state dir
-  local storage_directory="${DOKKU_LIB_ROOT}/data/tailscale/${APP}"
   dokku_log_info1 "Ensuring ${storage_directory} exists"
   mkdir -p "${storage_directory}"
 
   touch "${storage_directory}/DOKKU_ENABLED"
+
+  # For services, there is no post-deploy hook to auto-attach. Start the sidecar now.
+  if is_service_mode; then
+    dokku_log_info1 "attaching tailscale sidecar for service ${target_name}"
+    # tailscale_attach is idempotent and will no-op if already running
+    tailscale_attach || dokku_log_fail "Failed to attach tailscale sidecar for ${target_name}"
+  fi
 }
 
 tailscale_detach() {
-  [[ -z "$APP" ]] && dokku_log_fail "No app specified"
-  verify_app_name "$APP"
+  local target_name="$(get_target_name)"
+  local tailscale_container_name="$(get_tailscale_container_name)"
+  
+  # Validate target (app or service)
+  if is_service_mode; then
+    : # skip verification during detach for services (may be mid-destroy)
+  else
+    [[ -z "$APP" ]] && dokku_log_fail "No app specified"
+    verify_app_name "$APP"
+  fi
 
   ( ! tailscale_is_enabled ) && return
 
-  container_id=$("$DOCKER_BIN" ps -qaf "name=ts-$APP")
+  container_id=$("$DOCKER_BIN" ps -qaf "name=${tailscale_container_name}")
   if [[ -n "$container_id" ]] ; then
-    dokku_log_info1 "removing tailscale container ts-${APP}"
+    dokku_log_info1 "stopping tailscale container ${tailscale_container_name}"
     "$DOCKER_BIN" container stop "${container_id}"
+    dokku_log_info1 "removing tailscale container ${tailscale_container_name}"
     "$DOCKER_BIN" container rm "${container_id}"
   fi
 }
 
 tailscale_down() {
-  [[ -z "$APP" ]] && dokku_log_fail "No app specified"
-  verify_app_name "$APP"
+  local target_name="$(get_target_name)"
+  local storage_directory="$(get_storage_directory)"
+  
+  # Validate target (app or service)
+  if is_service_mode; then
+    : # skip verification during down for services (may be mid-destroy)
+  else
+    [[ -z "$APP" ]] && dokku_log_fail "No app specified"
+    verify_app_name "$APP"
+  fi
 
   ( ! tailscale_is_enabled ) && return
   tailscale_detach
-  rm -f "${DOKKU_LIB_ROOT}/data/tailscale/${APP}/DOKKU_ENABLED"
+  rm -f "${storage_directory}/DOKKU_ENABLED"
 }
 
 tailscale_is_enabled() {
-  [[ -z "$APP" ]] && dokku_log_fail "No app specified"
-  verify_app_name "$APP"
-  [[ -f "${DOKKU_LIB_ROOT}/data/tailscale/${APP}/DOKKU_ENABLED" ]]
+  local target_name="$(get_target_name)"
+  local storage_directory="$(get_storage_directory)"
+  
+  # Validate target (app or service)
+  # For enabled check we only need the state file, skip service verification to allow early lifecycle phases.
+  [[ -f "${storage_directory}/DOKKU_ENABLED" ]]
 }
 
 tailscale_attach() {
-  [[ -z "$APP" ]] && dokku_log_fail "No app specified"
-  verify_app_name "$APP"
+  local target_name="$(get_target_name)"
+  local hostname="$(get_hostname)"
+  local container_name="$(get_container_name)"
+  local tailscale_container_name="$(get_tailscale_container_name)"
+  local storage_directory="$(get_storage_directory)"
+  
+  # Validate target (app or service)
+  if is_service_mode; then
+    verify_service_name || true
+  else
+    [[ -z "$APP" ]] && dokku_log_fail "No app specified"
+    verify_app_name "$APP"
+  fi
 
   ( ! tailscale_is_enabled ) && return
 
@@ -80,14 +208,35 @@ tailscale_attach() {
 
   local ts_extra_args="$(config_get --global TS_EXTRA_ARGS)"
 
-  local storage_directory="${DOKKU_LIB_ROOT}/data/tailscale/${APP}"
+  # Set appropriate label for the container
+  local label_arg=""
+  if is_service_mode; then
+    label_arg="--label=com.dokku.service-name=${target_name}"
+  else
+    label_arg="--label=com.dokku.app-name=${target_name}"
+  fi
 
-  dokku_log_info1 "starting tailscale container ts-${APP}"
+  # If a tailscale container already exists, ensure it's running or recreate it if exited
+  local existing_any
+  existing_any=$("$DOCKER_BIN" ps -aqf "name=${tailscale_container_name}" || true)
+  if [[ -n "$existing_any" ]]; then
+    local existing_running
+    existing_running=$("$DOCKER_BIN" ps -qf "name=${tailscale_container_name}" || true)
+    if [[ -n "$existing_running" ]]; then
+      dokku_log_info1 "tailscale container ${tailscale_container_name} already running"
+      return 0
+    fi
+    dokku_log_info1 "removing stopped tailscale container ${tailscale_container_name}"
+    "$DOCKER_BIN" container rm "$tailscale_container_name" >/dev/null 2>&1 || true
+  fi
+
+  dokku_log_info1 "starting tailscale container ${tailscale_container_name}"
   "$DOCKER_BIN" container run \
-    "--label=com.dokku.app-name=${APP}" \
+    "${label_arg}" \
     $DOKKU_GLOBAL_RUN_ARGS \
-    --name "ts-${APP}" \
+    --name "${tailscale_container_name}" \
     --env TS_AUTHKEY="${authkey}" \
+    --env TS_HOSTNAME="${hostname}" \
     --env TS_EXTRA_ARGS="--advertise-tags=tag:dokku ${login_arg} ${ts_extra_args}" \
     --env TS_STATE_DIR=/var/lib/tailscale \
     --volume "${storage_directory}":/var/lib/tailscale \
@@ -95,51 +244,185 @@ tailscale_attach() {
     --cap-add=NET_ADMIN \
     --cap-add=SYS_MODULE \
     --restart unless-stopped \
-    --network "container:${APP}.web.1" \
+    --network "container:${container_name}" \
     --detach \
     tailscale/tailscale:latest
 }
 
 tailscale_serve_start() {
-  [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
-  verify_app_name "$APP"
+  local target_name="$(get_target_name)"
+  local tailscale_container_name="$(get_tailscale_container_name)"
+  
+  # Validate target (app or service)
+  if is_service_mode; then
+    verify_service_name || true
+  else
+    [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
+    verify_app_name "$APP"
+  fi
 
-  ( ! tailscale_is_enabled ) && dokku_log_fail "tailscale is not enabled for $APP"
+  ( ! tailscale_is_enabled ) && dokku_log_fail "tailscale is not enabled for ${target_name}"
 
-  "$DOCKER_BIN" exec "ts-${APP}" tailscale serve --bg "$PORT"
-  dokku_log_info1 "started serving traffic for ${APP} :${PORT} -> :443"
+  "$DOCKER_BIN" exec "${tailscale_container_name}" tailscale serve --bg "$PORT"
+  dokku_log_info1 "started serving traffic for ${target_name} :${PORT} -> :443"
 }
 
 tailscale_serve_stop() {
-  [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
-  verify_app_name "$APP"
+  local target_name="$(get_target_name)"
+  local tailscale_container_name="$(get_tailscale_container_name)"
+  
+  # Validate target (app or service)
+  if is_service_mode; then
+    verify_service_name || true
+  else
+    [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
+    verify_app_name "$APP"
+  fi
 
-  ( ! tailscale_is_enabled ) && dokku_log_fail "tailscale is not enabled for $APP"
+  ( ! tailscale_is_enabled ) && dokku_log_fail "tailscale is not enabled for ${target_name}"
 
-  "$DOCKER_BIN" exec "ts-${APP}" tailscale serve --https=443 off
-  dokku_log_info1 "stopped serving traffic for ${APP} on :443"
+  "$DOCKER_BIN" exec "${tailscale_container_name}" tailscale serve --https=443 off
+  dokku_log_info1 "stopped serving traffic for ${target_name} on :443"
 }
 
 tailscale_is_running_for_app() {
-  # If there's a tailscale container running for this app, return the name of
+  # If there's a tailscale container running for this app/service, return the name of
   # the tailscale container.
   #
   # Callers can use the output by checking if it's empty. An empty output means
   # that the container is not found.
-  [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
-  verify_app_name "$APP"
+  local target_name="$(get_target_name)"
+  local tailscale_container_name="$(get_tailscale_container_name)"
+  
+  # Validate target (app or service)
+  if is_service_mode; then
+    : # skip verification for running check
+  else
+    [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
+    verify_app_name "$APP"
+  fi
 
-  "$DOCKER_BIN" ps --filter "name=ts-${APP}" --format "{{.Names}}"
+  "$DOCKER_BIN" ps --filter "name=${tailscale_container_name}" --format "{{.Names}}"
 }
 
 tailscale_serve_url() {
-  [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
-  verify_app_name "$APP"
+  local target_name="$(get_target_name)"
+  local tailscale_container_name="$(get_tailscale_container_name)"
+  
+  # Validate target (app or service)
+  if is_service_mode; then
+    verify_service_name || true
+  else
+    [[ -z "$APP" ]] && dokku_log_fail "Please specify an app to run the command on"
+    verify_app_name "$APP"
+  fi
 
   ( ! tailscale_is_enabled ) && return
 
-  output=$("$DOCKER_BIN" exec "ts-${APP}" tailscale serve status)
+  output=$("$DOCKER_BIN" exec "${tailscale_container_name}" tailscale serve status)
   if [[ "$(echo $output | tr -d '[:space:]')" != "Noserveconfig" ]]; then
     echo $output | head -n 1 | cut -d ' ' -f 1 | tr -d '[:space:]'
+  fi
+}
+
+# Report status for an app or service
+tailscale_report_single() {
+  local target_name="$(get_target_name)"
+  if is_service_mode; then
+    target_name="${SERVICE_PLUGIN}.${SERVICE}"
+  fi
+  local hostname="$(get_hostname)"
+  local storage_directory="$(get_storage_directory)"
+  local tailscale_container_name="$(get_tailscale_container_name)"
+  local enabled="false"
+  [[ -f "${storage_directory}/DOKKU_ENABLED" ]] && enabled="true"
+
+  echo "=====> tailscale report (${target_name})"
+  if is_service_mode; then
+    echo "       Mode:            service"
+    echo "       Service plugin:  ${SERVICE_PLUGIN}"
+    echo "       Service name:    ${SERVICE}"
+  else
+    echo "       Mode:            app"
+    echo "       App:             ${APP}"
+  fi
+  echo "       Hostname:        ${hostname}"
+  echo "       State dir:       ${storage_directory}"
+  echo "       Enabled:         ${enabled}"
+  local container="$(tailscale_is_running_for_app || true)"
+  if [[ -n "$container" ]]; then
+    echo "       Sidecar:         running (${container})"
+    if output=$("$DOCKER_BIN" exec "$tailscale_container_name" tailscale status 2>/dev/null | head -n 1); then
+      echo "       Tailscale:       $output"
+    fi
+    local serve_url="$(tailscale_serve_url || true)"
+    if [[ -n "$serve_url" ]]; then
+      echo "       Serve URL:       $serve_url"
+    fi
+  else
+    echo "       Sidecar:         not running"
+  fi
+  echo
+}
+
+tailscale_report_all() {
+  dokku_log_info1 "listing all enabled tailscale apps and services"
+  local base_dir="${DOKKU_LIB_ROOT}/data/tailscale"
+  local found_any="false"
+  # Apps
+  if [[ -d "$base_dir" ]]; then
+    for d in "$base_dir"/*; do
+      [[ -d "$d" ]] || continue
+      local name="$(basename "$d")"
+      [[ "$name" == "services" ]] && continue
+      [[ -f "$d/DOKKU_ENABLED" ]] || continue
+      found_any="true"
+      ( unset SERVICE SERVICE_PLUGIN; export APP="$name"; tailscale_report_single )
+    done
+  fi
+  # Services
+  if [[ -d "$base_dir/services" ]]; then
+    for plugin_dir in "$base_dir/services"/*; do
+      [[ -d "$plugin_dir" ]] || continue
+      local plugin_name="$(basename "$plugin_dir")"
+      for svc_dir in "$plugin_dir"/*; do
+        [[ -d "$svc_dir" ]] || continue
+        [[ -f "$svc_dir/DOKKU_ENABLED" ]] || continue
+        local svc_name="$(basename "$svc_dir")"
+        found_any="true"
+        ( unset APP; export SERVICE_PLUGIN="$plugin_name" SERVICE="$svc_name"; tailscale_report_single )
+      done
+    done
+  fi
+  if [[ "$found_any" == "false" ]]; then
+    echo "(none)"
+  fi
+}
+
+tailscale_report() {
+  # If neither APP nor SERVICE specified, aggregate
+  if [[ -z "$APP" && -z "$SERVICE" ]]; then
+    tailscale_report_all
+    return 0
+  fi
+  tailscale_report_single
+}
+
+# Show logs for the tailscale sidecar
+# env: LINES (optional) number of lines, FOLLOW=true to follow
+tailscale_log() {
+  local tailscale_container_name="$(get_tailscale_container_name)"
+  local container="$(tailscale_is_running_for_app || true)"
+  if [[ -z "$container" ]]; then
+    dokku_log_fail "tailscale sidecar not running"
+  fi
+  local lines_opt=""
+  [[ -n "$LINES" ]] && lines_opt="--tail $LINES"
+  local follow_default="true"
+  local follow_value="${FOLLOW:-$follow_default}"
+  if [[ "$follow_value" == "true" ]]; then
+    "$DOCKER_BIN" logs -f $lines_opt "$tailscale_container_name"
+  else
+    "$DOCKER_BIN" logs $lines_opt "$tailscale_container_name"
   fi
 }

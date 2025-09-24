@@ -5,11 +5,18 @@ set -eo pipefail
 source "$PLUGIN_AVAILABLE_PATH/tailscale/functions"
 
 cmd-tailscale-serve() {
-  declare desc="serve the provided port over https"
+  declare desc="serve the provided port over https for an app or service"
   declare cmd="tailscale:serve"
   [[ "$1" == "$cmd" ]] && shift 1
 
-  declare APP="$1" PORT="$2"
+  # Parse --service flag
+  if [[ "$1" == "--service" ]]; then
+    shift 1
+    parse_service_flag "$1"; shift 1; declare PORT="$1"
+  else
+    declare APP="$1" PORT="$2"
+    export APP
+  fi
 
   if [[ "$PORT" == "stop" ]]; then
     tailscale_serve_stop

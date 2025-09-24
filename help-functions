@@ -6,15 +6,21 @@ cmd-tailscale-help() {
   declare desc="help command"
   declare CMD="$1"
   local plugin_name="tailscale"
-  local plugin_description="Run tailscale sidecar for an app"
+  local plugin_description="Run tailscale sidecar for an app or service"
   local plugin_description_long="$(cat <<desc
-Run tailscale sidecar for an app
+Run tailscale sidecar for an app or service
 
 This plugin expects global configuration values set for the oauth key:
 
   dokku config:set --global TS_AUTHKEY=tskey-client-00000000000000000-000000000000000000000000000000000
 
-If adding to an existing app, you will need to restart the app after running tailscale:up.
+For apps: If adding to an existing app, you will need to restart the app after running tailscale:up.
+For services: Works with any Dokku service plugin (postgres, redis, mysql, etc.).
+
+Examples:
+  dokku tailscale:up myapp                    # Enable for app
+  dokku tailscale:up --service postgres.db   # Enable for postgres service
+  dokku tailscale:serve --service redis.cache 6379  # Serve redis over HTTPS
 desc
 )"
 
@@ -35,8 +41,10 @@ help_desc
 fn-help-content() {
   declare desc="return help content"
   cat <<help_content
-    tailscale:up <app>, Starts the tailscale machine with the name of the app
-    tailscale:down <app>, Stops the tailscale sidecar
-    tailscale:serve <app> [<port>|stop], Starts or stops serving the provided port over https
+    tailscale:up [--service] <app|service>, Starts the tailscale machine (use --service for services like postgres.mydb)
+    tailscale:down [--service] <app|service>, Stops the tailscale sidecar
+    tailscale:serve [--service] <app|service> [<port>|stop], Starts or stops serving the provided port over https
+    tailscale:report [--service] <app|service>, Shows tailscale status information
+    tailscale:logs [--service] <app|service> [-t|--tail] [<lines>], Follows tailscale sidecar logs (default follow). Optional lines limits initial output
 help_content
 }

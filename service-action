@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+source "$PLUGIN_CORE_AVAILABLE_PATH/common/functions"
+source "$PLUGIN_AVAILABLE_PATH/tailscale/functions"
+set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
+# Trigger: service-action <phase> <service-plugin> <service-name>
+PHASE="$1"; SERVICE_PLUGIN="$2"; SERVICE_NAME="$3";
+
+# Export SERVICE (service instance) and SERVICE_PLUGIN (service type)
+export SERVICE="$SERVICE_NAME"
+export SERVICE_PLUGIN
+
+# Only handle create/start/delete phases for services
+case "$PHASE" in
+  post-create|post-create-complete)
+    if tailscale_is_enabled; then
+      dokku_log_info1 "attaching tailscale sidecar for service ${SERVICE_PLUGIN}.${SERVICE} after ${PHASE}"
+      tailscale_attach || dokku_log_warn "failed to attach tailscale for ${SERVICE_PLUGIN}.${SERVICE}"
+    fi
+    ;;
+  post-delete)
+    # If enabled, detach sidecar. Then remove state directory quietly.
+    if tailscale_is_enabled; then
+      dokku_log_info1 "detaching tailscale sidecar for service ${SERVICE_PLUGIN}.${SERVICE} after ${PHASE}"
+      tailscale_detach || true
+    fi
+    # Remove state directory to avoid stale enable state lingering across recreations
+    rm -rf "${DOKKU_LIB_ROOT}/data/tailscale/services/${SERVICE_PLUGIN}/${SERVICE}" 2>/dev/null || true
+    ;;
+  *)
+    # ignore other phases
+    ;;
+esac

@@ -1,6 +1,6 @@
 # dokku-tailscale
 
-Make apps available to your tailnet.
+Make Dokku apps and services (postgres, redis, etc.) available to your tailnet.
 
 ## Install
 
@@ -49,6 +49,44 @@ See the available commands:
 ```sh
 dokku tailscale:help
 ```
+### Enable for a Service
+
+You can also enable tailscale for any Dokku service instance by referencing it as `service-plugin.service-name`.
+
+```sh
+# Enable for a apps or service
+dokku tailscale:up myapp
+dokku ps:rebuild myapp
+dokku tailscale:up --service postgres.mydb
+
+# Show report
+dokku tailscale:report myapp
+dokku tailscale:report --service postgres.mydb
+
+# Stream logs
+dokku tailscale:logs myapp -t 100
+dokku tailscale:logs --service postgres.mydb -t 100
+```
+
+State for app sidecars lives under:
+
+```
+/var/lib/dokku/data/tailscale/<app-name>
+```
+
+State for service sidecars lives under:
+
+```
+/var/lib/dokku/data/tailscale/services/<service-plugin>/<service-name>
+```
+
+### Show Report
+
+Run without an argument to list all enabled apps and services:
+
+```sh
+dokku tailscale:report
+```
 
 ### Examples
 
@@ -77,7 +115,7 @@ Now destroy the app:
 dokku apps:destroy testing-nginx-on-dokku
 ```
 
-#### Add to existing container
+#### Add to existing app container
 
 If you added tailscale to an app which already had a container running in it,
 you will need to restart the container so that it joins the tailscale

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $DOKKU_TRACE ]] && set -x
+
+source "$PLUGIN_AVAILABLE_PATH/tailscale/functions"
+
+cmd-tailscale-logs() {
+  declare cmd="tailscale:logs"
+  [[ "$1" == "$cmd" ]] && shift 1
+
+  local follow="true" # default follow
+  local lines=""
+
+  # We'll accept an optional --service first in any position
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --service)
+        shift 1; parse_service_flag "$1"; shift 1; continue ;;
+      -t|--tail)
+        # optional numeric lines after flag
+        shift 1
+        if [[ "$1" =~ ^[0-9]+$ ]]; then
+          lines="$1"; shift 1; fi
+        continue ;;
+      [0-9]*)
+        # numeric without flag = lines
+        if [[ "$1" =~ ^[0-9]+$ ]]; then
+          lines="$1"; shift 1; continue; fi ;;
+      --)
+        shift 1; break ;;
+      *)
+        if [[ -z "$APP" && -z "$SERVICE" ]]; then
+          export APP="$1"; shift 1; continue
+        else
+          break
+        fi
+        ;;
+    esac
+  done
+
+  [[ -n "$lines" && ! "$lines" =~ ^[0-9]+$ ]] && dokku_log_fail "Tail lines must be numeric"
+  [[ -n "$APP" || -n "$SERVICE" ]] || dokku_log_fail "Specify an app or --service service-plugin.service-name"
+
+  export FOLLOW="$follow" LINES="$lines"
+  tailscale_log
+}
+
+cmd-tailscale-logs "$@"

@@ -5,11 +5,18 @@ set -eo pipefail
 source "$PLUGIN_AVAILABLE_PATH/tailscale/functions"
 
 cmd-tailscale-down() {
-  declare desc="removes an app from the tailnet"
+  declare desc="removes an app or service from the tailnet"
   declare cmd="tailscale:down"
   [[ "$1" == "$cmd" ]] && shift 1
 
-  declare APP="$1"
+  # Parse --service flag
+  if [[ "$1" == "--service" ]]; then
+    shift 1
+    parse_service_flag "$1"
+  else
+    declare APP="$1"
+    export APP
+  fi
 
   tailscale_down
 }
